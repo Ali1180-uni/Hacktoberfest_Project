@@ -40,20 +40,19 @@ Create a `.env.local` file in the project root:
 
 ```env
 GEMINI_API_KEY=your_server_side_google_ai_key
-GEMMA_MODEL=gemma-26b
+GEMMA_MODEL=gemma-4-26b-a4b-it
 ```
 
 ### Configured model
 
-The current model is:
+The documented model is:
 
 ```text
-gemma-26b
-Model ID: gemma-26b
-
+Gemma 4 26B
+Model ID: gemma-4-26b-a4b-it
 ```
 
-It is configured through `GEMMA_MODEL` so the model can be changed without editing application code. The selected model must support `generateContent` and image input through the Google AI API.
+Gemma 4 26B is configured through `GEMMA_MODEL` so the model can be changed without editing application code. The selected model must support `generateContent` and image input through the Google AI API.
 
 Start the development server:
 
