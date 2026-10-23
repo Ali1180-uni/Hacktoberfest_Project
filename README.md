@@ -13,7 +13,7 @@ To enable real reports, create `.env.local` with:
 
 ```env
 GEMINI_API_KEY=your_server_side_key
-GEMMA_MODEL=gemma-4-26b-a4b-it
+GEMMA_MODEL=gemini-3.6-flash
 ```
 
 The key is read only by `src/app/api/analyze/route.js`; it is never included in the client bundle. The app sends the image to Google’s API for analysis and does not save it. This is for research and education, not a medical device or diagnosis.

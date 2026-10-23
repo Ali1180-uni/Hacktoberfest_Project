@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export const runtime = "nodejs";
 
+// Zod Schema to strictly validate the model's output
 const ReportSchema = z.object({
   imageQuality: z.object({ status: z.enum(["good", "limited", "poor"]), retakeTips: z.array(z.string()).max(8) }),
   summary: z.string().max(600),
@@ -15,8 +16,6 @@ const ReportSchema = z.object({
   limitations: z.array(z.string()).max(8),
 });
 
-const MODEL_TIMEOUT_MS = 120000;
-
 function validImage(bytes, mime) {
   if (mime === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8;
   if (mime === "image/png") return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
@@ -24,26 +23,34 @@ function validImage(bytes, mime) {
   return false;
 }
 
-function parseReport(text) {
-  const cleaned = String(text || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  return ReportSchema.parse(JSON.parse(cleaned));
+function parseModelJson(text) {
+  const raw = String(text || "");
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON object found in the model response.");
+  return ReportSchema.parse(JSON.parse(match[0]));
 }
 
 function modelError(error) {
-  let status = Number(error?.status || error?.statusCode);
-  if (!status && typeof error?.message === "string") {
+  const status = Number(error?.status || error?.statusCode);
+  if (status === 401 || status === 403) return { status: 502, message: "The Google AI key was rejected. Check GEMINI_API_KEY." };
+  if (status === 404) return { status: 502, message: "The configured Gemma model was not found." };
+  if (status === 429) return { status: 429, message: "Google AI is temporarily rate-limiting requests. Please wait." };
+  if (status >= 500) return { status: 502, message: "Google's AI service is temporarily down (HTTP 500). Please try a smaller image." };
+  return { status: 502, message: "Google AI returned a report that could not be read." };
+}
+
+// Automatic retry mechanism (Adapted from your friend's code)
+async function generateWithRetry(ai, payload, retries = 3, delay = 1500) {
+  for (let i = 0; i < retries; i++) {
     try {
-      status = Number(JSON.parse(error.message)?.error?.code);
-    } catch {
-      status = 0;
+      console.log(`[SkinSense] Sending request to API (attempt ${i + 1})...`);
+      return await ai.models.generateContent(payload);
+    } catch (error) {
+      console.log(`[SkinSense] API attempt ${i + 1} failed: ${error.message}`);
+      if (i === retries - 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
-  if (status === 401 || status === 403) return { status: 502, message: "The Google AI key was rejected. Check GEMINI_API_KEY." };
-  if (status === 404) return { status: 502, message: "The configured model was not found. Check GEMMA_MODEL in .env and restart the dev server." };
-  if (status === 400) return { status: 502, message: "Google rejected the analysis request. Check the image format and model configuration, then try again." };
-  if (status === 429) return { status: 429, message: "Google AI is temporarily rate-limiting requests. Please wait." };
-  if (error?.name === "AbortError") return { status: 504, message: "The image analysis took too long. Please try a smaller image." };
-  return { status: 502, message: "Google AI returned an error. Please try again." };
 }
 
 export async function POST(request) {
@@ -63,47 +70,51 @@ export async function POST(request) {
     }
 
     const area = String(form.get("area") || "not provided").slice(0, 40);
-    const prompt = `You are a visual skin-observation assistant. Analyze the image. Return a JSON object matching this schema: {"imageQuality":{"status":"good|limited|poor","retakeTips":[]},"summary":"","observations":[{"feature":"","location":"","caveat":""}],"possibleExplanations":[{"label":"","rationale":"","alternatives":[]}],"urgency":"self_care|routine|prompt|urgent|emergency","urgencyReasons":[],"careSteps":[{"step":"","why":"","avoidIf":[]}],"otcInfo":[{"ingredientOrCategory":"","purpose":"","cautions":[]}],"limitations":[]}. Describe only visible features with uncertainty. User-selected area: ${area}.`;
+    const prompt = `You are a visual skin-observation assistant. Analyze the image. Return one valid JSON object only, matching this exact shape: {"imageQuality":{"status":"good|limited|poor","retakeTips":[]},"summary":"","observations":[{"feature":"","location":"","caveat":""}],"possibleExplanations":[{"label":"","rationale":"","alternatives":[]}],"urgency":"self_care|routine|prompt|urgent|emergency","urgencyReasons":[],"careSteps":[{"step":"","why":"","avoidIf":[]}],"otcInfo":[{"ingredientOrCategory":"","purpose":"","cautions":[]}],"limitations":[]}. Describe only visible features with uncertainty. User-selected area: ${area}.`;
     
-    const imagePart = { inlineData: { mimeType: image.type, data: Buffer.from(bytes).toString("base64") } };
+    const base64Image = Buffer.from(bytes).toString("base64");
     
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     
-    const model = process.env.GEMMA_MODEL || "gemini-3.8-flash";
+    // Constructing the exact payload structure your friend used
+    const payload = {
+      model: process.env.GEMMA_MODEL || "gemma-4-26b-a4b-it",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                data: base64Image,
+                mimeType: image.type
+              }
+            },
+            {
+              text: prompt
+            }
+          ]
+        }
+      ]
+    };
     
-    const apiRequest = ai.models.generateContent({
-      model: model,
-      contents: [{ role: "user", parts: [{ text: prompt }, imagePart] }],
-      config: { 
-        responseMimeType: "application/json", // Flash natively guarantees JSON output!
-        temperature: 0.1 
-      }
-    });
-
-    const result = await Promise.race([
-      apiRequest,
-      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("Timed out"), { name: "AbortError" })), MODEL_TIMEOUT_MS))
-    ]);
-
+    let result = await generateWithRetry(ai, payload);
+    console.log('[SkinSense] Received response successfully!');
+    
     let parsed;
     try {
-      parsed = parseReport(result.text);
+      parsed = parseModelJson(result.text);
     } catch {
-      const repair = `${prompt} Return the complete valid JSON object again. Do not use markdown or code fences. Include every required key, using empty arrays where needed.`;
-      const repairedRequest = ai.models.generateContent({
-        model,
-        contents: [{ role: "user", parts: [{ text: repair }, imagePart] }],
-        config: { responseMimeType: "application/json", temperature: 0.1 },
-      });
-      const repairedResult = await Promise.race([
-        repairedRequest,
-        new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("Timed out"), { name: "AbortError" })), MODEL_TIMEOUT_MS)),
-      ]);
-      parsed = parseReport(repairedResult.text);
+      console.log('[SkinSense] JSON extraction failed, attempting one repair run...');
+      // If it hallucinates non-JSON, retry one time asking it to fix the JSON
+      payload.contents[0].parts[1].text = `${prompt} Your previous response was invalid JSON. Return the complete JSON object again.`;
+      result = await generateWithRetry(ai, payload, 1); // Only retry once for repairs
+      parsed = parseModelJson(result.text);
     }
+    
     return Response.json(parsed);
 
   } catch (error) {
+    console.error("[SkinSense Backend API Error]:", error);
     const mapped = modelError(error);
     return Response.json({ message: mapped.message }, { status: mapped.status });
   }
