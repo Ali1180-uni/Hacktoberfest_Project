@@ -77,6 +77,39 @@ Restart the development server after changing `.env.local`; Next.js loads enviro
 
 The API key is only read on the server. Images are processed in memory for the request and are not saved by SkinSense.
 
+## Application flow
+
+This diagram shows the complete request path from upload to report:
+
+```mermaid
+flowchart TD
+    A[User opens SkinSense] --> B[Read first-visit guide]
+    B --> C[Choose skin photo]
+    C --> D{Client validation}
+    D -- Invalid type or over 5 MB --> E[Show toast error]
+    D -- Valid image --> F[Choose body area and give consent]
+    F --> G[Analyzer.js enters analyzing state]
+    G --> H[POST /api/analyze]
+    H --> I[Server validates MIME, size, and magic bytes]
+    I -- Invalid upload --> J[Return clear API error]
+    I -- Valid upload --> K[Send image to Gemini 3.6 Flash]
+    K --> L{Model response}
+    L -- Timeout or provider error --> M[Return friendly error and Retry]
+    L -- Malformed JSON --> N[One repair request]
+    N --> O{Zod validation}
+    L -- Valid JSON --> O
+    O -- Invalid report --> M
+    O -- Valid report --> P[Render research-oriented report]
+    P --> Q[Show observations, care guidance, limits, and sources]
+```
+
+### What judges can verify
+
+- **Privacy boundary:** the API key and model request stay on the server.
+- **Defence in depth:** the image is checked in the browser and again on the server.
+- **Honest failure states:** provider failures show a useful error and retry action; no fake report is generated.
+- **Structured output:** model JSON is validated before it reaches the report UI.
+
 ## Project structure
 
 ```text
