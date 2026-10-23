@@ -608,6 +608,14 @@ footer p {
     opacity: 0.9;
     animation: skinsense-loading-pulse 1.8s ease-in-out infinite;
   }
+  .loading-spinner {
+    width: 30px;
+    height: 30px;
+    border: 3px solid #4a4a50;
+    border-top-color: #f1f1ed;
+    border-radius: 50%;
+    animation: skinsense-spinner 0.7s linear infinite;
+  }
   .analyzer-error {
     background: #211719;
     border: 1px solid #71353a;
@@ -635,8 +643,12 @@ footer p {
     0%, 100% { transform: scale(0.92) rotate(-2deg); opacity: 0.62; }
     50% { transform: scale(1.04) rotate(2deg); opacity: 1; }
   }
+  @keyframes skinsense-spinner {
+    to { transform: rotate(360deg); }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .loading-svg { animation: none; }
+    .loading-svg,
+    .loading-spinner { animation: none; }
   }
   .report-wrap {
     margin: 0;

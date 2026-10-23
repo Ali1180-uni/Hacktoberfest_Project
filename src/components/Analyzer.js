@@ -103,9 +103,7 @@ export default function Analyzer({ onResult, onReset }) {
   if (status === "analyzing") {
     return (
       <div className="analyzer-panel analyzer-loading" role="status" aria-live="polite">
-        {/* The requirement intentionally uses a public SVG as an animation asset. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="loading-svg" src="/loading.svg" alt="" />
+        <span className="loading-spinner" aria-hidden="true" />
         <strong>Preparing your research report</strong>
         <p>Checking the image and waiting for the analysis service.</p>
       </div>
