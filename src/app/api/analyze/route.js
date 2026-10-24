@@ -5,6 +5,7 @@ export const runtime = "nodejs";
 
 // Zod Schema to strictly validate the model's output
 const ReportSchema = z.object({
+  imageType: z.literal("skin"),
   imageQuality: z.object({ status: z.enum(["good", "limited", "poor"]), retakeTips: z.array(z.string()).max(8) }),
   summary: z.string().max(600),
   observations: z.array(z.object({ feature: z.string(), location: z.string(), caveat: z.string() })).max(8),
@@ -15,6 +16,13 @@ const ReportSchema = z.object({
   otcInfo: z.array(z.object({ ingredientOrCategory: z.string(), purpose: z.string(), cautions: z.array(z.string()).max(8) })).max(8),
   limitations: z.array(z.string()).max(8),
 });
+
+const NotSkinImageSchema = z.object({
+  imageType: z.literal("not_skin"),
+  message: z.string().max(300),
+});
+
+const AnalysisSchema = z.discriminatedUnion("imageType", [ReportSchema, NotSkinImageSchema]);
 
 function validImage(bytes, mime) {
   if (mime === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8;
@@ -27,7 +35,7 @@ function parseModelJson(text) {
   const raw = String(text || "");
   const match = raw.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("No JSON object found in the model response.");
-  return ReportSchema.parse(JSON.parse(match[0]));
+  return AnalysisSchema.parse(JSON.parse(match[0]));
 }
 
 function modelError(error) {
@@ -70,7 +78,7 @@ export async function POST(request) {
     }
 
     const area = String(form.get("area") || "not provided").slice(0, 40);
-    const prompt = `You are a visual skin-observation assistant. Analyze the image. Return one valid JSON object only, matching this exact shape: {"imageQuality":{"status":"good|limited|poor","retakeTips":[]},"summary":"","observations":[{"feature":"","location":"","caveat":""}],"possibleExplanations":[{"label":"","rationale":"","alternatives":[]}],"urgency":"self_care|routine|prompt|urgent|emergency","urgencyReasons":[],"careSteps":[{"step":"","why":"","avoidIf":[]}],"otcInfo":[{"ingredientOrCategory":"","purpose":"","cautions":[]}],"limitations":[]}. Describe only visible features with uncertainty. User-selected area: ${area}.`;
+    const prompt = `You are a visual skin-observation assistant. First decide whether the image visibly shows human skin or a skin concern. Do not treat the selected body area as evidence. If it does not, return exactly one valid JSON object in this shape: {"imageType":"not_skin","message":"This does not appear to be a skin image. Please upload a clear photo of the skin concern."}. If it does show human skin or a skin concern, return exactly one valid JSON object in this shape: {"imageType":"skin","imageQuality":{"status":"good|limited|poor","retakeTips":[]},"summary":"","observations":[{"feature":"","location":"","caveat":""}],"possibleExplanations":[{"label":"","rationale":"","alternatives":[]}],"urgency":"self_care|routine|prompt|urgent|emergency","urgencyReasons":[],"careSteps":[{"step":"","why":"","avoidIf":[]}],"otcInfo":[{"ingredientOrCategory":"","purpose":"","cautions":[]}],"limitations":[]}. Describe only visible features with uncertainty; do not diagnose. User-selected area: ${area}.`;
     
     const base64Image = Buffer.from(bytes).toString("base64");
     
@@ -109,6 +117,10 @@ export async function POST(request) {
       payload.contents[0].parts[1].text = `${prompt} Your previous response was invalid JSON. Return the complete JSON object again.`;
       result = await generateWithRetry(ai, payload, 1); // Only retry once for repairs
       parsed = parseModelJson(result.text);
+    }
+
+    if (parsed.imageType === "not_skin") {
+      return Response.json({ message: parsed.message }, { status: 422 });
     }
     
     return Response.json(parsed);

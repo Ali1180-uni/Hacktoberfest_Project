@@ -103,7 +103,15 @@ export default function Analyzer({ onResult, onReset }) {
   if (status === "analyzing") {
     return (
       <div className="analyzer-panel analyzer-loading" role="status" aria-live="polite">
-        <span className="loading-spinner" aria-hidden="true" />
+        <Image
+          className="loading-svg"
+          src="/loading.svg"
+          width={160}
+          height={120}
+          alt=""
+          aria-hidden="true"
+          priority
+        />
         <strong>Preparing your research report</strong>
         <p>Checking the image and waiting for the analysis service.</p>
       </div>
